@@ -1,0 +1,5 @@
+{
+  "name": "Asistente IA para Coach Motivacional",
+  "description": "Una aplicación web para coaches para gestionar frases motivacionales y contactos, con generación de frases asistida por IA usando la API de Gemini. Los datos se almacenan localmente en el navegador.",
+  "requestFramePermissions": []
+}
