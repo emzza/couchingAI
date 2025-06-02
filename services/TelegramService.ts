@@ -1,76 +1,149 @@
-import { Phrase, Contact } from '../types';
+import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions';
+import { NewMessage } from 'telegram/events';
+import { Api } from 'telegram/tl';
+import dotenv from 'dotenv';
 
-const TELEGRAM_API_URL = 'https://api.telegram.org/bot';
+dotenv.config();
 
-const validateTelegramToken = (token: string): boolean => {
-  // El token de Telegram debe tener el formato: números:letras
-  const telegramTokenRegex = /^\d+:[A-Za-z0-9_-]{35}$/;
-  return telegramTokenRegex.test(token);
-};
+class TelegramService {
+  private static instance: TelegramService;
+  private client: TelegramClient | null = null;
+  private isConnected: boolean = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private connectionCheckTimer: NodeJS.Timeout | null = null;
+  private keepAliveTimer: NodeJS.Timeout | null = null;
 
-export const sendTelegramMessage = async (
-  botToken: string,
-  chatId: string,
-  message: string
-): Promise<boolean> => {
-  if (!validateTelegramToken(botToken)) {
-    throw new Error('Token de Telegram inválido. Debe ser un token válido de BotFather.');
+  private constructor() {
+    // Constructor privado para Singleton
   }
 
-  if (!chatId) {
-    throw new Error('ID de chat de Telegram inválido.');
+  public static getInstance(): TelegramService {
+    if (!TelegramService.instance) {
+      TelegramService.instance = new TelegramService();
+    }
+    return TelegramService.instance;
   }
 
-  try {
-    const response = await fetch(`${TELEGRAM_API_URL}${botToken}/sendMessage`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: 'HTML',
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Error de Telegram: ${errorData.description || response.statusText}`);
+  public async connect(): Promise<void> {
+    if (this.isConnected) {
+      console.log('Telegram ya está conectado');
+      return;
     }
 
-    return true;
-  } catch (error) {
-    console.error('Error enviando mensaje a Telegram:', error);
-    throw error;
-  }
-};
-
-export const scheduleMessage = (
-  phrase: Phrase,
-  contact: Contact,
-  botToken: string
-): void => {
-  if (!validateTelegramToken(botToken)) {
-    console.error('Token de Telegram inválido');
-    return;
-  }
-
-  const sendTime = new Date(phrase.sendDateTime).getTime();
-  const now = Date.now();
-  const delay = sendTime - now;
-
-  if (delay < 0) {
-    console.warn('La hora de envío ya ha pasado');
-    return;
-  }
-
-  setTimeout(async () => {
     try {
-      await sendTelegramMessage(botToken, contact.telegramId, phrase.text);
-      console.log(`Mensaje enviado exitosamente a ${contact.name}`);
+      const apiId = parseInt(process.env.TELEGRAM_API_ID || '');
+      const apiHash = process.env.TELEGRAM_API_HASH || '';
+      const session = new StringSession(process.env.TELEGRAM_SESSION || '');
+
+      if (!apiId || !apiHash) {
+        throw new Error('No se encontraron las credenciales de Telegram en las variables de entorno');
+      }
+
+      this.client = new TelegramClient(session, apiId, apiHash, {
+        connectionRetries: 5,
+      });
+
+      await this.client.connect();
+      this.isConnected = true;
+      console.log('Conexión exitosa a Telegram');
+
+      // Configurar reconexión automática
+      this.setupReconnection();
+      this.setupConnectionCheck();
+      this.setupKeepAlive();
+
     } catch (error) {
-      console.error(`Error al enviar mensaje a ${contact.name}:`, error);
+      const errorData = error as Error;
+      console.error('Error al conectar a Telegram:', errorData.message);
+      throw error;
     }
-  }, delay);
-}; 
+  }
+
+  private setupReconnection(): void {
+    if (this.reconnectTimer) {
+      clearInterval(this.reconnectTimer);
+    }
+
+    this.reconnectTimer = setInterval(async () => {
+      if (!this.isConnected && this.client) {
+        try {
+          await this.client.connect();
+          this.isConnected = true;
+          console.log('Reconexión exitosa a Telegram');
+        } catch (error) {
+          console.error('Error en la reconexión a Telegram:', error);
+        }
+      }
+    }, 30000); // Intentar reconectar cada 30 segundos
+  }
+
+  private setupConnectionCheck(): void {
+    if (this.connectionCheckTimer) {
+      clearInterval(this.connectionCheckTimer);
+    }
+
+    this.connectionCheckTimer = setInterval(async () => {
+      if (this.client && this.isConnected) {
+        try {
+          await this.client.getMe();
+        } catch (error) {
+          console.error('Error en la verificación de conexión:', error);
+          this.isConnected = false;
+        }
+      }
+    }, 60000); // Verificar conexión cada minuto
+  }
+
+  private setupKeepAlive(): void {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+    }
+
+    this.keepAliveTimer = setInterval(async () => {
+      if (this.client && this.isConnected) {
+        try {
+          await this.client.invoke(new Api.Ping({ pingId: BigInt(Date.now()) }));
+        } catch (error) {
+          console.error('Error en el keep-alive:', error);
+        }
+      }
+    }, 30000);
+  }
+
+  public async sendMessage(chatId: string, message: string): Promise<void> {
+    if (!this.client || !this.isConnected) {
+      throw new Error('Cliente de Telegram no conectado');
+    }
+
+    try {
+      await this.client.sendMessage(chatId, { message });
+    } catch (error) {
+      console.error('Error al enviar mensaje:', error);
+      throw error;
+    }
+  }
+
+  public async disconnect(): Promise<void> {
+    if (this.reconnectTimer) {
+      clearInterval(this.reconnectTimer);
+    }
+    if (this.connectionCheckTimer) {
+      clearInterval(this.connectionCheckTimer);
+    }
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+    }
+
+    if (this.client) {
+      await this.client.disconnect();
+      this.isConnected = false;
+    }
+  }
+
+  public isConnectedToTelegram(): boolean {
+    return this.isConnected;
+  }
+}
+
+export const telegramService = TelegramService.getInstance(); 

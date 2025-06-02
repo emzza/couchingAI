@@ -370,10 +370,10 @@ class WhatsAppService {
             message: message.message,
             to: message.to,
             timestamp: new Date(),
-            contacts: [message.to] // En caso de envío masivo, aquí irían todos los contactos
+            contacts: [message.to]
           }
         });
-        window.dispatchEvent(event);
+        globalThis.dispatchEvent(event);
       } else {
         throw new Error('Error al enviar el mensaje');
       }
@@ -402,6 +402,23 @@ class WhatsAppService {
     if (!this.isConnecting && !this.socket?.connected) {
       this.initializeSocket();
     }
+  }
+
+  private setupKeepAlive(): void {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+    }
+
+    this.keepAliveTimer = setInterval(async () => {
+      if (this.socket && this.socket.connected) {
+        try {
+          const pingId = process.env.NODE_ENV === 'production' ? Date.now() : Math.random();
+          await this.socket.emit('ping');
+        } catch (error) {
+          console.error('Error en el keep-alive:', error);
+        }
+      }
+    }, 30000);
   }
 }
 

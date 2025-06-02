@@ -147,12 +147,12 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
                 </span>
               }
             </div>
-            <button 
+      <button
               onClick={handleReconnect}
               className="mt-2 px-4 py-2 rounded-lg bg-green-100 text-green-800 font-semibold shadow hover:bg-green-200 transition-all w-max"
-            >
+      >
               {isConnected ? 'Reconectar WhatsApp' : 'Conectar WhatsApp'}
-            </button>
+      </button>
             <p className="text-xs text-gray-400 mt-2">Asegúrate de que tu teléfono tenga conexión a internet y la sesión de WhatsApp Web esté activa.</p>
           </div>
         </div>
