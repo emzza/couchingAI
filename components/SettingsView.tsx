@@ -16,20 +16,23 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
   const [phoneNumber, setPhoneNumber] = useState('');
   const [message, setMessage] = useState('');
   const [notification, setNotification] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState<{ percent: number, message: string } | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'not_initialized' | 'connecting' | 'connected' | 'fully_connected' | 'disconnected' | 'auth_failure'>('not_initialized');
 
   useEffect(() => {
-    // Inicializar el servicio de WhatsApp
     whatsAppService.initialize();
 
-    // Configurar listeners de Socket.IO
     const handleQR = (qr: string) => {
-      console.log('QR recibido');
+      console.log('QR recibido en SettingsView');
       setQrCode(qr);
+      setConnectionStatus('connecting');
     };
 
-    const handleSessionStatus = (status: boolean) => {
-      console.log('Estado de sesión:', status);
-      setIsConnected(status);
+    const handleSessionStatus = (data: { status: string, connected: boolean }) => {
+      console.log('Estado de sesión en SettingsView:', data);
+      setConnectionStatus(data.status as any);
+      setIsConnected(data.connected);
     };
 
     const handleMessageSent = () => {
@@ -42,15 +45,27 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
       setNotification({ type: 'error', message: `Error al enviar mensaje: ${error.message}` });
     };
 
-    const handleConnectionStatus = (status: { connected: boolean, reason?: string }) => {
+    const handleConnectionStatus = (status: { connected: boolean, status: string, reason?: string }) => {
       console.log('Estado de conexión:', status);
+      setConnectionStatus(status.status as any);
       setIsConnected(status.connected);
-      if (!status.connected && status.reason) {
+      
+      if (status.status === 'auth_failure') {
+        setNotification({ 
+          type: 'error', 
+          message: 'Error de autenticación. Por favor, intenta conectar nuevamente.' 
+        });
+      } else if (status.reason) {
         setNotification({ 
           type: 'error', 
           message: `Conexión perdida: ${status.reason}` 
         });
       }
+    };
+
+    const handleLoadingStatus = (data: { percent: number, message: string }) => {
+      console.log('Estado de carga:', data);
+      setLoadingProgress(data);
     };
 
     // Agregar listeners
@@ -59,12 +74,15 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
     whatsAppService.addEventListener('message_sent', handleMessageSent);
     whatsAppService.addEventListener('message_error', handleMessageError);
     whatsAppService.addEventListener('connection_status', handleConnectionStatus);
+    whatsAppService.addEventListener('loading_status', handleLoadingStatus);
 
     // Obtener estado inicial
     whatsAppService.getStatus().then(status => {
+      console.log('Estado inicial:', status);
       setIsConnected(status.connected);
-      if (status.qrCode) {
-        setQrCode(status.qrCode);
+      if (!status.connected) {
+        // Si no está conectado, forzar la generación del QR
+        whatsAppService.reconnect();
       }
     }).catch(error => {
       console.error('Error al obtener estado inicial:', error);
@@ -72,6 +90,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
         type: 'error', 
         message: 'Error al conectar con el servidor de WhatsApp' 
       });
+      // Intentar reconectar en caso de error
+      whatsAppService.reconnect();
     });
 
     // Limpieza al desmontar
@@ -81,6 +101,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
       whatsAppService.removeEventListener('message_sent', handleMessageSent);
       whatsAppService.removeEventListener('message_error', handleMessageError);
       whatsAppService.removeEventListener('connection_status', handleConnectionStatus);
+      whatsAppService.removeEventListener('loading_status', handleLoadingStatus);
     };
   }, []);
 
@@ -91,19 +112,82 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoading(true);
     try {
+      if (connectionStatus !== 'fully_connected') {
+        throw new Error('La conexión no está lista para enviar mensajes. Por favor, espera a que la conexión esté completamente establecida.');
+      }
+
       const whatsAppMessage: WhatsAppMessage = {
         to: phoneNumber,
         message: message
       };
       await whatsAppService.sendMessage(whatsAppMessage);
-    } catch (error) {
-      setNotification({ type: 'error', message: 'Error al enviar el mensaje' });
+      setNotification({ type: 'success', message: 'Mensaje enviado correctamente' });
+      setPhoneNumber('');
+      setMessage('');
+    } catch (error: any) {
+      console.error('Error al enviar mensaje:', error);
+      setNotification({ 
+        type: 'error', 
+        message: error.message || 'Error al enviar el mensaje'
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleReconnect = () => {
+    console.log('Iniciando reconexión...');
+    setQrCode(null); // Limpiar QR existente
+    setIsConnected(false); // Asegurar que el estado refleje desconexión
     whatsAppService.reconnect();
+  };
+
+  const handleForceDisconnect = async () => {
+    setIsLoading(true);
+    try {
+      await whatsAppService.forceDisconnect();
+      setQrCode(null);
+      setIsConnected(false);
+      setNotification({ type: 'success', message: 'Conexión limpiada correctamente' });
+    } catch (error) {
+      setNotification({ type: 'error', message: 'Error al limpiar la conexión' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const getStatusMessage = () => {
+    switch (connectionStatus) {
+      case 'not_initialized':
+        return 'Iniciando conexión...';
+      case 'connecting':
+        return 'Esperando escaneo del código QR';
+      case 'connected':
+        return 'Conectado, esperando confirmación...';
+      case 'fully_connected':
+        return 'Conectado y listo para enviar mensajes';
+      case 'disconnected':
+        return 'Desconectado';
+      case 'auth_failure':
+        return 'Error de autenticación';
+      default:
+        return 'Estado desconocido';
+    }
+  };
+
+  const getStatusColor = () => {
+    switch (connectionStatus) {
+      case 'fully_connected':
+        return 'text-green-600';
+      case 'connected':
+        return 'text-yellow-600';
+      case 'auth_failure':
+        return 'text-red-600';
+      default:
+        return 'text-gray-600';
+    }
   };
 
   return (
@@ -119,13 +203,53 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
         </h3>
         <p className="text-gray-600 mb-4">Escanea el siguiente código QR con la app de WhatsApp en tu teléfono para conectar tu cuenta y poder enviar mensajes desde la plataforma.</p>
         <div className="flex flex-col md:flex-row gap-8 items-center">
-          <div className="flex flex-col items-center justify-center min-w-[180px] min-h-[180px] bg-gray-50 rounded-lg border border-dashed border-gray-200 p-4">
-            {qrCode ? (
-              <img src={qrCode} alt="Código QR de WhatsApp" className="w-40 h-40 object-contain" />
+          <div className="flex flex-col items-center justify-center min-w-[180px] min-h-[180px] bg-gray-50 rounded-lg border border-dashed border-gray-200 p-4 relative">
+            {isLoading ? (
+              <div className="flex flex-col items-center justify-center h-40 w-40">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
+                <span className="text-sm text-gray-500 mt-2">Cargando...</span>
+              </div>
+            ) : loadingProgress ? (
+              <div className="flex flex-col items-center justify-center h-40 w-40">
+                <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center">
+                  <div className="text-blue-500 font-semibold">{loadingProgress.percent}%</div>
+                </div>
+                <span className="text-sm text-blue-600 mt-2">{loadingProgress.message}</span>
+              </div>
+            ) : connectionStatus === 'fully_connected' ? (
+              <div className="flex flex-col items-center justify-center h-40 w-40">
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
+                  <svg className="w-10 h-10 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <span className={`text-sm ${getStatusColor()} mt-2`}>{getStatusMessage()}</span>
+              </div>
+            ) : connectionStatus === 'connected' ? (
+              <div className="flex flex-col items-center justify-center h-40 w-40">
+                <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-500"></div>
+                </div>
+                <span className={`text-sm ${getStatusColor()} mt-2`}>{getStatusMessage()}</span>
+              </div>
+            ) : qrCode ? (
+              <div className="flex flex-col items-center">
+                <img src={qrCode} alt="Código QR de WhatsApp" className="w-40 h-40 object-contain" />
+                <p className={`text-sm ${getStatusColor()} mt-2`}>{getStatusMessage()}</p>
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-40 w-40 text-gray-400">
-                <svg className="w-16 h-16 mb-2" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M8 8h.01M16 8h.01M8 16h.01M16 16h.01" stroke="currentColor" strokeWidth="2" /></svg>
-                <span className="text-sm">QR no disponible</span>
+                <svg className="w-16 h-16 mb-2" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                  <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="2" />
+                  <path d="M8 8h.01M16 8h.01M8 16h.01M16 16h.01" stroke="currentColor" strokeWidth="2" />
+                </svg>
+                <span className={`text-sm ${getStatusColor()}`}>{getStatusMessage()}</span>
+                <button 
+                  onClick={handleReconnect}
+                  className="mt-2 px-3 py-1 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200"
+                >
+                  Solicitar QR
+                </button>
               </div>
             )}
           </div>
@@ -147,12 +271,24 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
                 </span>
               }
             </div>
-      <button
-              onClick={handleReconnect}
-              className="mt-2 px-4 py-2 rounded-lg bg-green-100 text-green-800 font-semibold shadow hover:bg-green-200 transition-all w-max"
-      >
-              {isConnected ? 'Reconectar WhatsApp' : 'Conectar WhatsApp'}
-      </button>
+            <div className="flex gap-2">
+              <button 
+                onClick={handleReconnect}
+                className="mt-2 px-4 py-2 rounded-lg bg-green-100 text-green-800 font-semibold shadow hover:bg-green-200 transition-all w-max"
+                disabled={isLoading}
+              >
+                {isConnected ? 'Reconectar WhatsApp' : 'Conectar WhatsApp'}
+              </button>
+              {isConnected && (
+                <button 
+                  onClick={handleForceDisconnect}
+                  className="mt-2 px-4 py-2 rounded-lg bg-red-100 text-red-800 font-semibold shadow hover:bg-red-200 transition-all w-max"
+                  disabled={isLoading}
+                >
+                  Limpiar Conexión
+                </button>
+              )}
+            </div>
             <p className="text-xs text-gray-400 mt-2">Asegúrate de que tu teléfono tenga conexión a internet y la sesión de WhatsApp Web esté activa.</p>
           </div>
         </div>
@@ -211,79 +347,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({ currentBotToken, onSetBotTo
          <p className="text-xs text-gray-500 mt-2">
             Consulta la documentación o el archivo <code>.env.example</code> (si existe en tu proyecto) para más detalles sobre cómo configurarla si la generación de frases con IA no funciona.
          </p>
-      </div>
-
-      {/* Sección de WhatsApp */}
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
-        <h3 className="text-xl font-semibold text-gray-900 mb-4">Conexión WhatsApp</h3>
-        
-        {/* Estado de conexión */}
-        <div className="mb-4">
-          <span className="text-sm font-medium text-gray-700">Estado: </span>
-          <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-            isConnected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-          }`}>
-            {isConnected ? 'Conectado' : 'Desconectado'}
-          </span>
-        </div>
-
-        {/* Código QR */}
-        {qrCode && !isConnected && (
-          <div className="mb-6">
-            <p className="text-sm text-gray-600 mb-2">Escanea el código QR con WhatsApp:</p>
-            <img src={qrCode} alt="WhatsApp QR Code" className="w-48 h-48 mx-auto" />
-          </div>
-        )}
-
-        {/* Formulario de envío de mensajes */}
-        <form onSubmit={handleSendMessage} className="space-y-4">
-          <div>
-            <label htmlFor="phone" className="block text-sm font-medium text-gray-700">
-              Número de teléfono
-            </label>
-            <input
-              type="tel"
-              id="phone"
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-              placeholder="Ej: 1234567890"
-              required
-            />
-          </div>
-
-          <div>
-            <label htmlFor="message" className="block text-sm font-medium text-gray-700">
-              Mensaje
-            </label>
-            <textarea
-              id="message"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-              rows={4}
-              placeholder="Escribe tu mensaje aquí..."
-              required
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-            disabled={!isConnected}
-          >
-            Enviar Mensaje
-          </button>
-        </form>
-
-        {/* Notificaciones */}
-        {notification && (
-          <div className={`mt-4 p-4 rounded-md ${
-            notification.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-          }`}>
-            {notification.message}
-          </div>
-        )}
       </div>
 
     </div>

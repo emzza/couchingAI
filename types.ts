@@ -7,22 +7,14 @@ export interface Coach {
     totalBilled: number;
     lastBillingDate: string | null;
   };
-  createdAt: string;
-  updatedAt: string;
-  lastLoginAt?: string;
-  lastActivityAt?: string;
 }
 
 export interface Phrase {
   id: string;
   text: string;
   coachName: string;
-  sendDateTime: string;
+  sendDateTime: string; 
   createdAt: string;
-  updatedAt: string;
-  sentAt?: string;
-  status: 'pending' | 'sent' | 'failed';
-  timezone: string;
 }
 
 export type Platform = 'telegram' | 'whatsapp';
@@ -34,10 +26,6 @@ export interface Contact {
   whatsappNumber?: string;
   platform: Platform;
   createdAt: string;
-  updatedAt: string;
-  lastMessageAt?: string;
-  lastInteractionAt?: string;
-  timezone: string;
 }
 
 export enum AppView {
