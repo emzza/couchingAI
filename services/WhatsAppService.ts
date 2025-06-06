@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import axios from 'axios';
+import axiosInstance from './axiosConfig';
 
 const API_URL = import.meta.env.VITE_API_WSP_ONLINE ?? import.meta.env.VITE_API_WSP_LOCAL;
 
@@ -98,12 +98,7 @@ class WhatsAppService {
     this.keepAliveTimer = setInterval(async () => {
       try {
         if (this.socket?.connected) {
-          const response = await axios.get(`${normalizeUrl(API_URL)}/api/whatsapp/ping`, {
-            withCredentials: true,
-            headers: {
-              'Access-Control-Allow-Origin': '*'
-            }
-          });
+          const response = await axiosInstance.get('/api/whatsapp/ping');
           if (response.status === 200) {
             console.log('Keep-alive ping exitoso');
           }
@@ -141,10 +136,7 @@ class WhatsAppService {
         autoConnect: true,
         forceNew: true,
         path: '/socket.io',
-        withCredentials: true,
-        extraHeaders: {
-          'Access-Control-Allow-Origin': '*'
-        }
+        withCredentials: true
       });
 
       this.setupSocketListeners();
@@ -185,10 +177,7 @@ class WhatsAppService {
           autoConnect: true,
           forceNew: true,
           path: '/socket.io',
-          withCredentials: true,
-          extraHeaders: {
-            'Access-Control-Allow-Origin': '*'
-          }
+          withCredentials: true
         });
         
         this.setupSocketListeners();
@@ -420,7 +409,7 @@ class WhatsAppService {
 
   public async getStatus(): Promise<WhatsAppStatus> {
     try {
-      const response = await axios.get(`${API_URL}/api/whatsapp/status`);
+      const response = await axiosInstance.get('/api/whatsapp/status');
       return response.data;
     } catch (error) {
       console.error('Error al obtener el estado de WhatsApp:', error);
@@ -517,7 +506,7 @@ class WhatsAppService {
         throw new Error(validationError);
       }
 
-      const response = await axios.post(`${normalizeUrl(API_URL)}/api/whatsapp/send`, {
+      const response = await axiosInstance.post('/api/whatsapp/send', {
         ...message,
         to: message.to
       });
@@ -572,12 +561,7 @@ class WhatsAppService {
     try {
       this.disconnect();
       
-      const response = await axios.post(`${normalizeUrl(API_URL)}/api/whatsapp/logout`, {}, {
-        withCredentials: true,
-        headers: {
-          'Access-Control-Allow-Origin': '*'
-        }
-      });
+      const response = await axiosInstance.post('/api/whatsapp/logout');
 
       if (response.status === 200) {
         console.log('Sesión de WhatsApp forzadamente desconectada');
@@ -597,12 +581,7 @@ class WhatsAppService {
 
   public async checkSession(): Promise<boolean> {
     try {
-      const response = await axios.get(`${normalizeUrl(API_URL)}/api/whatsapp/status`, {
-        withCredentials: true,
-        headers: {
-          'Access-Control-Allow-Origin': '*'
-        }
-      });
+      const response = await axiosInstance.get('/api/whatsapp/status');
       
       if (!response.data.connected) {
         this.initializeSocket();
